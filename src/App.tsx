@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faComments, faCode, faDisplay, faDatabase } from "@fortawesome/free-solid-svg-icons";
-import { ChevronDown, Menu, Plus, X } from "lucide-react";
+import { ChevronDown, Loader2, Menu, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -92,6 +92,7 @@ export default function App() {
   const [starterIndex, setStarterIndex] = useState(0);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [placeholderText, setPlaceholderText] = useState(starterPrompts[0]);
+  const [building, setBuilding] = useState(false);
 
   const trimmedPrompt = prompt.trim();
   const isPromptEmpty = trimmedPrompt.length === 0;
@@ -166,8 +167,11 @@ export default function App() {
       setPromptTouched(true);
       return;
     }
+    setBuilding(true);
     sessionStorage.setItem("pending_prompt", trimmedPrompt);
-    navigate({ to: "/dashboard" });
+    setTimeout(() => {
+      navigate({ to: "/dashboard" });
+    }, 500);
   }
 
   function insertStarterPrompt() {
@@ -299,8 +303,15 @@ export default function App() {
                 <span className="inline-flex items-center gap-2 px-2 text-sm font-medium text-muted-foreground">
                   Build <ChevronDown className="h-4 w-4" />
                 </span>
-                <Button type="submit" size="sm" disabled={isPromptEmpty}>
-                  Start building
+                <Button type="submit" size="sm" disabled={isPromptEmpty || building}>
+                  {building ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Preparing...
+                    </>
+                  ) : (
+                    "Start building"
+                  )}
                 </Button>
               </div>
             </div>
