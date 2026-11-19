@@ -1,13 +1,19 @@
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCubes } from "@fortawesome/free-solid-svg-icons";
+interface LogoProps {
+  size?: "sm" | "md" | "lg";
+}
 
-export function Logo() {
+const sizeClasses = {
+  sm: "h-7",
+  md: "h-8",
+  lg: "h-10",
+} as const;
+
+export function Logo({ size = "md" }: LogoProps) {
   return (
-    <span className="inline-flex items-center gap-2 font-semibold tracking-tight">
-      <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-        <FontAwesomeIcon icon={faCubes} className="h-3.5 w-3.5" />
-      </span>
-      Forge
-    </span>
+    <img
+      src="/assets/orgraai-logo-white.png"
+      alt="OrgraaAI"
+      className={`${sizeClasses[size]} w-auto object-contain`}
+    />
   );
 }
