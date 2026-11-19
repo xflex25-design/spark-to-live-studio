@@ -1,21 +1,34 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-const SYSTEM = `You are Forge, an expert front-end engineer that builds complete web apps.
+const SYSTEM = `You are Forge, an expert full-stack engineer that builds complete, database-backed web apps.
 Always reply with:
 1. One or two short sentences describing what you built or changed.
 2. The COMPLETE app as a single self-contained HTML document inside one \`\`\`html fenced block.
 
 Rules for the HTML:
 - One file. Use React 18 and ReactDOM from https://unpkg.com (UMD builds) with Babel standalone for JSX, and Tailwind via https://cdn.tailwindcss.com.
-- Persist data with localStorage when the app needs saved state.
+- A real Supabase-backed backend SDK is pre-injected globally as \`window.Orgraa\` for EVERY app:
+  - Auth (real accounts + sessions persisted across refreshes):
+    - \`await window.Orgraa.auth.signUp({ email, password, name })\` -> returns user \`{ id, email, name }\`
+    - \`await window.Orgraa.auth.signIn({ email, password })\` -> returns user \`{ id, email, name }\`
+    - \`await window.Orgraa.auth.signOut()\`
+    - \`await window.Orgraa.auth.getUser()\` -> returns current user or \`null\`
+  - Database (real Postgres collections persisted across refreshes and devices):
+    - \`const col = window.Orgraa.db.collection("tasks")\` (use descriptive lowercase names)
+    - \`await col.list()\` or \`await col.list({ mine: true })\` -> returns array of \`{ id, owner_id, data, created_at, updated_at }\`
+    - \`await col.create({ title: "...", done: false })\` -> returns created record \`{ id, owner_id, data, ... }\`
+    - \`await col.update(id, { done: true })\` -> returns updated record
+    - \`await col.remove(id)\` -> deletes record
+- Always use \`window.Orgraa.auth\` when the user asks for login/signup/accounts, and always use \`window.Orgraa.db.collection(...)\` to save and load data so all data persists in Postgres across refreshes. Do NOT use localStorage for app data (sandboxed iframes block localStorage).
+- Handle loading and error states cleanly around async \`window.Orgraa\` calls.
 - Make it polished, responsive and fully working. No placeholders, no TODOs.
 - When changing an existing app, return the whole updated file, not a diff.`;
 
 type Msg = { role: "user" | "assistant"; content: string };
 
 async function callClaude(messages: Msg[]): Promise<string> {
-  const key = process.env['LOVABLE_API_KEY'];
+  const key = process.env["LOVABLE_API_KEY"];
   if (!key) throw new Error("AI is not configured.");
   const res = await fetch("https://ai.gateway.lovable.dev/v1/messages", {
     method: "POST",
@@ -36,7 +49,11 @@ async function callClaude(messages: Msg[]): Promise<string> {
     const body = await res.text();
     console.error("AI gateway error", res.status, body);
     let msg = `AI request failed (${res.status}).`;
-    try { msg = JSON.parse(body)?.error?.message ?? JSON.parse(body)?.message ?? msg; } catch {}
+    try {
+      msg = JSON.parse(body)?.error?.message ?? JSON.parse(body)?.message ?? msg;
+    } catch {
+      // ignored
+    }
     if (res.status === 402) msg = "Out of AI credits. " + msg;
     if (res.status === 429) msg = "Too many requests, try again in a moment.";
     throw new Error(msg);
@@ -58,9 +75,14 @@ async function callClaude(messages: Msg[]): Promise<string> {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data) continue;
-        let evt: any;
-        try { evt = JSON.parse(data); } catch { continue; }
-        if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") text += evt.delta.text;
+        let evt: Record<string, unknown>;
+        try {
+          evt = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta")
+          text += evt.delta.text;
         if (evt.type === "message_delta" && evt.delta?.stop_reason) stop = evt.delta.stop_reason;
         if (evt.type === "error") throw new Error(evt.error?.message ?? "AI stream error.");
       }
@@ -87,16 +109,28 @@ export const generateApp = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const { data: project, error: pErr } = await supabase.from("projects").select("id, code, name").eq("id", data.projectId).single();
+    const { data: project, error: pErr } = await supabase
+      .from("projects")
+      .select("id, code, name")
+      .eq("id", data.projectId)
+      .single();
     if (pErr || !project) throw new Error("Project not found.");
 
-    await supabase.from("messages").insert({ project_id: project.id, user_id: userId, role: "user", content: data.prompt });
+    await supabase
+      .from("messages")
+      .insert({ project_id: project.id, user_id: userId, role: "user", content: data.prompt });
 
     const { data: history } = await supabase
-      .from("messages").select("role, content").eq("project_id", project.id)
-      .order("created_at", { ascending: true }).limit(20);
+      .from("messages")
+      .select("role, content")
+      .eq("project_id", project.id)
+      .order("created_at", { ascending: true })
+      .limit(20);
 
-    const msgs: Msg[] = (history ?? []).map((m) => ({ role: m.role as Msg["role"], content: m.content }));
+    const msgs: Msg[] = (history ?? []).map((m) => ({
+      role: m.role as Msg["role"],
+      content: m.content,
+    }));
     const last = msgs[msgs.length - 1];
     if (project.code && last) {
       last.content = `Current app code:\n\`\`\`html\n${project.code}\n\`\`\`\n\nRequest: ${last.content}`;
@@ -105,8 +139,12 @@ export const generateApp = createServerFn({ method: "POST" })
     const text = await callClaude(msgs);
     const { html, summary } = extractHtml(text);
 
-    await supabase.from("messages").insert({ project_id: project.id, user_id: userId, role: "assistant", content: summary });
-    const patch: { updated_at: string; code?: string; name?: string } = { updated_at: new Date().toISOString() };
+    await supabase
+      .from("messages")
+      .insert({ project_id: project.id, user_id: userId, role: "assistant", content: summary });
+    const patch: { updated_at: string; code?: string; name?: string } = {
+      updated_at: new Date().toISOString(),
+    };
     if (html) patch.code = html;
     if (project.name === "Untitled app") patch.name = data.prompt.slice(0, 48);
     await supabase.from("projects").update(patch).eq("id", project.id);
