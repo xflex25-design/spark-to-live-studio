@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
+import { GoogleGenAI } from "@google/genai";
+
 const SYSTEM = `You are Forge, an expert full-stack engineer that builds complete, database-backed web apps.
 Always reply with:
 1. One or two short sentences describing what you built or changed.
@@ -27,69 +29,53 @@ Rules for the HTML:
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-async function callClaude(messages: Msg[]): Promise<string> {
-  const key = process.env["LOVABLE_API_KEY"];
-  if (!key) throw new Error("AI is not configured.");
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/messages", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      "X-Lovable-AIG-SDK": "fetch",
+async function callGemini(messages: Msg[]): Promise<string> {
+  const apiKey =
+    process.env["GEMINI_API_KEY"] || process.env["LOVABLE_API_KEY"] || process.env["API_KEY"];
+  if (!apiKey) {
+    throw new Error(
+      "AI is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel.",
+    );
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
     },
-    body: JSON.stringify({
-      model: "anthropic/claude-sonnet-5",
-      max_tokens: 32000,
-      system: SYSTEM,
-      messages,
-      stream: true,
-    }),
   });
-  if (!res.ok || !res.body) {
-    const body = await res.text();
-    console.error("AI gateway error", res.status, body);
-    let msg = `AI request failed (${res.status}).`;
-    try {
-      msg = JSON.parse(body)?.error?.message ?? JSON.parse(body)?.message ?? msg;
-    } catch {
-      // ignored
+
+  const contents = messages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+
+  try {
+    const streamRes = await ai.models.generateContentStream({
+      model: "gemini-4-neon",
+      contents,
+      config: {
+        systemInstruction: SYSTEM,
+      },
+    });
+
+    let text = "";
+    for await (const chunk of streamRes) {
+      if (chunk.text) text += chunk.text;
     }
-    if (res.status === 402) msg = "Out of AI credits. " + msg;
-    if (res.status === 429) msg = "Too many requests, try again in a moment.";
+    return text;
+  } catch (err) {
+    console.error("Gemini API error", err);
+    const msg = err instanceof Error ? err.message : "AI generation failed.";
+    if (/API_KEY_INVALID|PERMISSION_DENIED|403|400/i.test(msg)) {
+      throw new Error(
+        "Invalid or missing API key. Please check your GEMINI_API_KEY in the Settings > Secrets panel.",
+      );
+    }
     throw new Error(msg);
   }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let text = "";
-  let stop: string | null = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let i;
-    while ((i = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      for (const line of frame.split("\n")) {
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (!data) continue;
-        let evt: Record<string, unknown>;
-        try {
-          evt = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta")
-          text += evt.delta.text;
-        if (evt.type === "message_delta" && evt.delta?.stop_reason) stop = evt.delta.stop_reason;
-        if (evt.type === "error") throw new Error(evt.error?.message ?? "AI stream error.");
-      }
-    }
-  }
-  if (stop === "refusal") throw new Error("The AI declined this request.");
-  return text;
 }
 
 export function extractHtml(text: string): { html: string | null; summary: string } {
@@ -136,7 +122,7 @@ export const generateApp = createServerFn({ method: "POST" })
       last.content = `Current app code:\n\`\`\`html\n${project.code}\n\`\`\`\n\nRequest: ${last.content}`;
     }
 
-    const text = await callClaude(msgs);
+    const text = await callGemini(msgs);
     const { html, summary } = extractHtml(text);
 
     await supabase
