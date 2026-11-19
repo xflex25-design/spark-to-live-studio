@@ -91,10 +91,56 @@ export default function App() {
   const [promptTouched, setPromptTouched] = useState(false);
   const [starterIndex, setStarterIndex] = useState(0);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [placeholderText, setPlaceholderText] = useState(starterPrompts[0]);
 
   const trimmedPrompt = prompt.trim();
   const isPromptEmpty = trimmedPrompt.length === 0;
   const showEmptyError = promptTouched && isPromptEmpty;
+
+  useEffect(() => {
+    if (prompt !== "") {
+      setPlaceholderText("A web app that...");
+      return;
+    }
+
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReducedMotion) {
+      setPlaceholderText(starterPrompts[0]);
+      return;
+    }
+
+    let currentPromptIdx = 0;
+    let charIdx = 0;
+    let isDeleting = false;
+    let timeoutId: NodeJS.Timeout;
+
+    function type() {
+      const fullText = starterPrompts[currentPromptIdx];
+      if (isDeleting) {
+        charIdx--;
+        setPlaceholderText(fullText.slice(0, charIdx));
+        if (charIdx === 0) {
+          isDeleting = false;
+          currentPromptIdx = (currentPromptIdx + 1) % starterPrompts.length;
+          timeoutId = setTimeout(type, 400);
+          return;
+        }
+        timeoutId = setTimeout(type, 35);
+      } else {
+        charIdx++;
+        setPlaceholderText(fullText.slice(0, charIdx));
+        if (charIdx === fullText.length) {
+          isDeleting = true;
+          timeoutId = setTimeout(type, 2200);
+          return;
+        }
+        timeoutId = setTimeout(type, 65);
+      }
+    }
+
+    timeoutId = setTimeout(type, 400);
+    return () => clearTimeout(timeoutId);
+  }, [prompt]);
 
   useEffect(() => {
     function handleScroll() {
@@ -220,7 +266,7 @@ export default function App() {
                   handleBuild(e);
                 }
               }}
-              placeholder="A web app that..."
+              placeholder={placeholderText}
               className="w-full resize-none bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             <p
